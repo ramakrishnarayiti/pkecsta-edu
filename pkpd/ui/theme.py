@@ -8,6 +8,16 @@ green, used for active-state text — accent itself is reserved for fills/
 borders/icons per the source design)
 status: success #16A34A  warning #B45309  error #DC2626
 
+Green discipline: every green anywhere in the app — this stylesheet, the
+results-table cell tints, the brand label — is one of these two tokens
+(#2F8F5B / #20613e) or a tint mixed from #2F8F5B toward white. #D5E9DE
+(table row selection) is that mix at 20% accent — the exact shade
+pk_results_view.py's _tint(0.20) computes, kept in sync by hand since QSS
+can't call Python. #B6D8C6 (sidebar selected-tab background) is the same
+mix at 35% — stronger, since it needs to read against the sidebar's own
+gray, not white. No other green hex gets introduced; a new shade here
+reads as a different color to the user even if it "looks close enough."
+
 Fonts: source design uses Cormorant Garamond (headings) / Lora (body) from
 Google Fonts — not bundled (no font files shipped, only a CDN @import), so
 this falls back to system serif faces. Component chrome (inputs, nav items,
@@ -45,7 +55,8 @@ QListWidget#sidebarNav::item {
     padding: 7px 10px;
     margin: 1px 0;
     border-radius: 4px;
-    color: #201f1d;
+    color: #20613e;
+    font-weight: 600;
 }
 
 QListWidget#sidebarNav::item:hover:!selected {
@@ -53,15 +64,18 @@ QListWidget#sidebarNav::item:hover:!selected {
 }
 
 QListWidget#sidebarNav::item:selected {
-    background: #d0dcd5;
+    background: #B6D8C6;
     color: #20613e;
     font-weight: 600;
 }
 
+/* Every green in this file is one of exactly two tokens — accent #2F8F5B
+   and accent-text #20613e — so nothing reads as a different, unrelated
+   green. No other green hex belongs anywhere in this stylesheet. */
 QPushButton {
-    background: transparent;
-    color: #201f1d;
-    border: 1px solid #d1d0d0;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2F8F5B, stop:1 #20613e);
+    color: white;
+    border: 1px solid #20613e;
     padding: 6px 14px;
     border-radius: 4px;
     font-family: "Cormorant Garamond", "Constantia", "Georgia", serif;
@@ -70,17 +84,17 @@ QPushButton {
 }
 
 QPushButton:hover {
-    background: #f8f4f4;
+    background: #2F8F5B;
 }
 
-QPushButton:pressed {
-    background: #d0dcd5;
-    border-color: #2F8F5B;
+QPushButton:pressed, QPushButton:checked {
+    background: #20613e;
 }
 
 QPushButton:disabled {
-    color: #a8a5a3;
-    border-color: #e2e0e0;
+    background: #D5E9DE;
+    color: #f3f2f2;
+    border-color: #D5E9DE;
 }
 
 QComboBox, QLineEdit {
@@ -118,15 +132,15 @@ QTableView {
     color: #201f1d;
     gridline-color: #ececea;
     border: 1px solid #d1d0d0;
-    selection-background-color: #d0dcd5;
+    selection-background-color: #D5E9DE;
     selection-color: #20613e;
     font-family: "Consolas", "Cascadia Mono", monospace;
     font-size: 12px;
 }
 
 QHeaderView::section {
-    background-color: #eae9e9;
-    color: #5b5856;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2F8F5B, stop:1 #20613e);
+    color: white;
     padding: 6px;
     border: none;
     border-bottom: 1px solid #d1d0d0;

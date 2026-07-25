@@ -1,3 +1,8 @@
+"""PKecsta — entry point.
+
+Developed by Rayiti Ramakrishna, PharmD, PhD candidate at CSIR-CDRI.
+Built with the assistance of Claude (Anthropic).
+"""
 import sys
 
 from PySide6.QtWidgets import QApplication

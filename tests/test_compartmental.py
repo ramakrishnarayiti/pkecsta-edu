@@ -74,6 +74,24 @@ def test_1c_extravascular_recovers_true_params():
     assert result["params"]["V"] == pytest.approx(true_V, rel=1e-3)
 
 
+def test_1c_extravascular_with_tlag_recovers_true_params():
+    true_ka, true_k, true_V, true_tlag, dose = 1.2, 0.15, 15.0, 0.5, 200.0
+    t = np.array([0.25, 0.5, 1, 2, 4, 6, 8, 12, 18, 24])
+    y = conc_1c_extravascular(t, true_ka, true_k, true_V, dose, tlag=true_tlag)
+
+    def model(tt, ka, k, V, tlag):
+        return conc_1c_extravascular(tt, ka, k, V, dose, tlag)
+
+    result = fit_model(model, t, y, p0=[0.5, 0.1, 10.0, 0.1],
+                        bounds=([1e-6, 1e-6, 1e-6, 0.0], [20, 10, 200, t.max()]),
+                        param_names=["ka", "k", "V", "tlag"])
+
+    assert result["params"]["ka"] == pytest.approx(true_ka, rel=1e-3)
+    assert result["params"]["k"] == pytest.approx(true_k, rel=1e-3)
+    assert result["params"]["V"] == pytest.approx(true_V, rel=1e-3)
+    assert result["params"]["tlag"] == pytest.approx(true_tlag, rel=1e-3)
+
+
 def test_1c_extravascular_flip_flop_limit_matches_general_form_nearby():
     # As ka -> k, the general closed form is numerically unstable (0/0);
     # confirm the limiting-case branch agrees with the general formula

@@ -280,15 +280,42 @@ class Actions:
         self.window.mode_toggle.setChecked(False)
         self.window._run_nca()
         assert self._wait_for_nca(30.0), "NCA never finished"
+        fmt = p.get("format", "Text")
+        self.window.nca_core_output_format.setCurrentText(fmt)
         self.window._export_nca_core_output()
-        exported = ROOT / "reports" / "_sweep_export.txt"
-        text = exported.read_text(encoding="utf-8")
-        for expected in ("Settings:", "Results:", "Warnings:"):
-            assert expected in text, f"Core Output missing {expected!r}"
+        base = ROOT / "reports" / "_sweep_export.txt"
+
+        if fmt == "Text":
+            text = base.read_text(encoding="utf-8")
+            for expected in ("Settings:", "Results:", "Warnings:"):
+                assert expected in text, f"Core Output missing {expected!r}"
+            return
+
+        # The mocked save dialog always hands back the same fixed .txt path;
+        # _export_nca_core_output appends the correct extension when it
+        # doesn't match the chosen format, same as it would for a real path.
+        import pandas as pd
+        exported = base.with_name(base.name + (".csv" if fmt == "CSV" else ".xlsx"))
+        df = (pd.read_csv(exported) if fmt == "CSV"
+              else pd.read_excel(exported, engine="openpyxl"))
+        sections = set(df["Section"])
+        assert {"Settings", "Results"} <= sections, f"{fmt} Core Output missing expected sections"
 
     def export_no_results(self, p):
         self.window._nca_last_result = None
         self.window._export_nca_core_output()
+
+    def export_plot(self, p):
+        self._load(p.get("file", "01_iv_bolus_postdose.csv"))
+        self.window.mode_toggle.setChecked(False)
+        self.window._run_nca()
+        assert self._wait_for_nca(30.0), "NCA never finished"
+        plot = self.window.nca_plot
+        plot.export_format.setCurrentText(p["format"])
+        plot._export()
+        exported = ROOT / "reports" / "_sweep_export.txt"
+        assert exported.exists() and exported.stat().st_size > 0, \
+            f"{p['format']} plot export produced no file"
 
     def toggle_plot_scale(self, p):
         for plot in (self.window.nca_plot, self.window.comp_plot):

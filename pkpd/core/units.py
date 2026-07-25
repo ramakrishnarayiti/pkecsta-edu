@@ -150,4 +150,5 @@ def compartmental_units(time_unit: str, conc_unit: str, dose_unit: str) -> dict[
         "Cl": f"{vol}/{time_unit}",
         "A": conc_unit,
         "B": conc_unit,
+        "tlag": time_unit,
     }

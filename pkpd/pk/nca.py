@@ -549,23 +549,40 @@ _FLAG_MESSAGES = {
 }
 
 
+def core_output_rows(result: dict, settings: dict, units: dict[str, str] | None = None) -> list[tuple[str, str, object, str]]:
+    """(section, key, value, unit) rows covering Settings and Results — the
+    tabular equivalent of `format_core_output`. Both the text export and any
+    tabular one (CSV/Excel) build from this, so they can never show
+    different numbers for the same run."""
+    units = units or {}
+    rows = [("Settings", str(key), value, "") for key, value in settings.items()]
+    for key, value in result.items():
+        if key in ("terminal_t", "terminal_conc"):
+            continue
+        rows.append(("Results", str(key), value, units.get(key, "")))
+    return rows
+
+
+def core_output_warnings(result: dict) -> list[str]:
+    """Every warning `format_core_output` would print, as a plain list —
+    shared so text/CSV/Excel exports can never disagree about which
+    warnings apply to a given result."""
+    return [msg(result) for msg in _FLAG_MESSAGES.values() if msg(result)]
+
+
 def format_core_output(result: dict, settings: dict, units: dict[str, str] | None = None) -> str:
     """Full settings + results + warnings as one traceable text block
     (Guide's Core Output requirement) — everything needed to reproduce a
     result by hand, in one file."""
-    units = units or {}
-    lines = ["PKPD Software — NCA Core Output", "=" * 40, "", "Settings:"]
-    for key, value in settings.items():
-        lines.append(f"  {key}: {value}")
+    rows = core_output_rows(result, settings, units)
+    lines = ["PKecsta — NCA Core Output", "=" * 40, "", "Settings:"]
+    lines += [f"  {key}: {value}" for section, key, value, _unit in rows if section == "Settings"]
 
     lines += ["", "Results:"]
-    for key, value in result.items():
-        if key in ("terminal_t", "terminal_conc"):
-            continue
-        unit = units.get(key, "")
-        lines.append(f"  {key}: {value} {unit}".rstrip())
+    lines += [f"  {key}: {value} {unit}".rstrip()
+              for section, key, value, unit in rows if section == "Results"]
 
-    warnings = [msg(result) for msg in _FLAG_MESSAGES.values() if msg(result)]
+    warnings = core_output_warnings(result)
     lines += ["", "Warnings:"]
     lines += [f"  - {w}" for w in warnings] if warnings else ["  none"]
 

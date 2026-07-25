@@ -103,6 +103,10 @@ class DataGrid(QTableView):
         self.setModel(self._model)
         self._defaults: dict[str, str] = {}
         self.add_row()
+        # Default column width fits neither the uppercase header label nor
+        # any data yet, so "CONCENTRATION" etc. clipped until the user
+        # dragged every column wider by hand, every time the app opened.
+        self.resizeColumnsToContents()
 
     # -- row/column operations -------------------------------------------
     def rowCount(self) -> int:  # noqa: N802 - mirrors the old QTableWidget API
@@ -191,6 +195,7 @@ class DataGrid(QTableView):
         self._model.replace_all(rows)
         if self._model.rowCount() == 0:
             self.add_row()
+        self.resizeColumnsToContents()
 
     def to_dataframe(self) -> pd.DataFrame:
         records = []

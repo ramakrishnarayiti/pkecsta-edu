@@ -25,6 +25,7 @@ COMPARTMENTAL_MODELS = [
     "1-compartment: IV bolus (Cl, V)",
     "1-compartment: IV infusion",
     "1-compartment: Extravascular",
+    "1-compartment: Extravascular (lag-time)",
     "2-compartment: IV bolus",
 ]
 WEIGHT_SCHEMES = ["uniform", "inverse_y", "inverse_y2"]
@@ -139,7 +140,12 @@ def _nca_steps() -> list[Step]:
         Step("nca", "run_nca", "10k rows — UI stall measurement",
              params={"file": "12_large.csv", "all_subjects": False}, timeout_s=120.0),
         Step("nca", "toggle_plot_scale", "NCA plot semi-log/linear toggle"),
-        Step("nca", "export_core_output", "export Core Output to a file"),
+        Step("nca", "export_core_output", "export Core Output as Text"),
+        Step("nca", "export_core_output", "export Core Output as CSV", params={"format": "CSV"}),
+        Step("nca", "export_core_output", "export Core Output as Excel", params={"format": "Excel"}),
+        Step("nca", "export_plot", "export plot as PNG", params={"format": "PNG"}),
+        Step("nca", "export_plot", "export plot as PDF", params={"format": "PDF"}),
+        Step("nca", "export_plot", "export plot as JPEG", params={"format": "JPEG"}),
 
         # Input validation: each of these must raise exactly one dialog.
         Step("nca", "run_nca", "λz range that is not two numbers",
@@ -168,6 +174,7 @@ def _compartmental_steps() -> list[Step]:
         "1-compartment: IV bolus (Cl, V)": "01_iv_bolus_postdose.csv",
         "1-compartment: IV infusion": "04_iv_infusion.csv",
         "1-compartment: Extravascular": "03_extravascular.csv",
+        "1-compartment: Extravascular (lag-time)": "03_extravascular.csv",
         "2-compartment: IV bolus": "01_iv_bolus_postdose.csv",
     }
     for model, name in fittable.items():

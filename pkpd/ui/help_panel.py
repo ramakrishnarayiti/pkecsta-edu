@@ -13,8 +13,12 @@ HELP_HTML = """
   <li><b>Import File...</b> — load a CSV/Excel file, then map its columns
       to the required fields.</li>
   <li>Or type/paste directly into the grid (Ctrl+V pastes from Excel),
-      then click <b>Use Grid Data</b>.</li>
+      then click <b>Acquire Data</b>.</li>
 </ul>
+<p>The line under the grid shows the status in red: <i>"Data must be
+acquired to proceed to next steps."</i> It turns green — <i>"Data
+acquired. Go to NCA Tab."</i> — once <b>Acquire Data</b> succeeds. Nothing
+in the NCA or Compartmental tabs works until it's green.</p>
 <p>Required columns per row:</p>
 <table border="1" cellspacing="0" cellpadding="4">
 <tr><th>subject_id</th><th>time</th><th>concentration</th><th>dose</th><th>route</th></tr>
@@ -36,10 +40,18 @@ row to row.</p>
 <h3>2. Non-compartmental analysis — NCA tab</h3>
 <p>Pick the subject, pick an AUC method (<code>linear</code> is the safe
 default), click <b>Run NCA</b>. Results table fills in on the left,
-concentration-time plot on the right. The button above the plot switches
-between <b>Semi-log</b> and <b>Linear</b> y-axis scale — semi-log is the
-default and best for reading the terminal slope, linear is useful for
-absorption-phase shape.</p>
+concentration-time plot on the right. The results table has four columns —
+<b>Parameter</b>, <b>Value</b>, <b>Unit</b>, and <b>Full Name</b> (the
+spelled-out name of each parameter) — and every column can be dragged
+wider if something's clipped.</p>
+<p>Above the plot: the <b>Semi-log / Linear</b> button switches the y-axis
+scale — semi-log is the default and best for reading the terminal slope,
+linear is useful for absorption-phase shape. Next to it, <b>Export
+Plot...</b> saves the figure at 300 dpi (publication quality) as
+<b>PNG</b>, <b>PDF</b>, or <b>JPEG</b> — pick the format from the dropdown
+first. <b>Export Core Output...</b> saves the full settings/results/
+warnings for this run as <b>Text</b>, <b>CSV</b>, or <b>Excel</b> — same
+dropdown pattern, and all three formats always agree on the numbers.</p>
 <p><b>Example result</b> for the table above: Cmax=100, λz≈0.15/hr,
 half-life≈4.6hr, CL≈0.73 L/hr, Vz≈4.9 L.</p>
 
@@ -52,13 +64,17 @@ cursor) until the fit finishes — this can take a couple of seconds for
 harder models, that's normal, not a freeze.</p>
 <p>Model choices include two parameterizations of the same 1-compartment
 IV bolus model: <b>K, V</b> (rate constant) and <b>Cl, V</b> (clearance) —
-same underlying curve, different parameters. Results include each
-parameter's <b>CV%</b> (relative standard error) alongside its estimate, so
-you can judge how precisely each parameterization was determined.</p>
+same underlying curve, different parameters. There are also two
+extravascular (oral) models: plain <b>Extravascular</b>, and
+<b>Extravascular (lag-time)</b>, which adds a <code>tlag</code> parameter
+for a delayed absorption onset — use it when the concentration doesn't
+start rising until well after dosing. Results include each parameter's
+<b>CV%</b> (relative standard error) alongside its estimate, so you can
+judge how precisely each parameter was determined.</p>
 <p><b>Example result</b> for the table above (1-compartment IV bolus, K/V):
 k≈0.15/hr, V≈5 L, R²≈1.0 — the fitted orange curve should sit right on top
-of the blue observed points. Same plot has the Semi-log/Linear toggle
-described above.</p>
+of the blue observed points. Same plot has the Semi-log/Linear toggle and
+Export Plot control described above.</p>
 
 <h3>Tips</h3>
 <ul>
@@ -68,7 +84,8 @@ described above.</p>
       was actually given.</li>
   <li>R² near 1.0, small residuals, and low CV% (Compartmental results
       table) mean a good fit; low R² or high CV% means try a different
-      model (e.g. 2-compartment) or the other K/V vs Cl/V parameterization.</li>
+      model (e.g. 2-compartment, or the lag-time extravascular variant) or
+      the other K/V vs Cl/V parameterization.</li>
 </ul>
 """
 

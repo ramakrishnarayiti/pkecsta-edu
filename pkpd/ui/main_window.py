@@ -6,7 +6,7 @@ from functools import partial
 
 import numpy as np
 import pandas as pd
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -50,14 +50,35 @@ COMPARTMENTAL_CHOICES = {
     "1-compartment: IV bolus (Cl, V)": ("1c", "iv_bolus_cl"),
     "1-compartment: IV infusion": ("1c", "iv_infusion"),
     "1-compartment: Extravascular": ("1c", "extravascular"),
+    "1-compartment: Extravascular (lag-time)": ("1c", "extravascular_tlag"),
     "2-compartment: IV bolus": ("2c", "iv_bolus"),
 }
+
+# Core Output export format -> (file extension, Qt save-dialog filter).
+CORE_OUTPUT_FORMATS = {
+    "Text": ("txt", "Text files (*.txt)"),
+    "CSV": ("csv", "CSV files (*.csv)"),
+    "Excel": ("xlsx", "Excel files (*.xlsx)"),
+}
+
+
+class _ClickableLabel(QLabel):
+    """A QLabel that emits `clicked` on a left click — no visual hint (no
+    pointer cursor, no underline) so the brand label doubles as an About
+    trigger without looking like a button."""
+
+    clicked = Signal()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("PKPD Software — Pharmacokinetics")
+        self.setWindowTitle("PKecsta Edu — Pharmacokinetics")
         self.resize(1400, 750)
 
         self.dataset: Dataset | None = None
@@ -90,6 +111,11 @@ class MainWindow(QMainWindow):
         ):
             item = QListWidgetItem(label)
             item.setToolTip(nav_tooltips[label])
+            # QSS font-weight doesn't reliably bold QListWidgetItem text
+            # across Qt styles — set it directly on the item's font instead.
+            font = item.font()
+            font.setBold(True)
+            item.setFont(font)
             nav.addItem(item)
             pages.addWidget(page)
         nav.currentRowChanged.connect(pages.setCurrentIndex)
@@ -122,16 +148,28 @@ class MainWindow(QMainWindow):
         )
         self.mode_toggle.toggled.connect(self._set_manual_mode)
 
-        brand = QLabel("PKPD Studio")
+        brand = _ClickableLabel(
+            'PKecsta<span style="font-size: 11px; font-weight: 600;"> Edu</span>'
+        )
         brand.setStyleSheet(
             'font-family: "Cormorant Garamond", "Constantia", "Georgia", serif;'
             "font-weight: 600; font-size: 18px; color: #20613e;"
         )
+        brand.clicked.connect(self._show_about)
         top_bar = QHBoxLayout()
         top_bar.addWidget(brand)
         top_bar.addStretch()
         top_bar.addWidget(self.mode_toggle)
         top_bar.addWidget(guide_btn)
+
+        footer = QLabel(
+            '<p style="color: #B45309; font-weight: 600; margin: 0;">'
+            "For education purpose only. Not for research use.</p>"
+            '<p style="color: #5b5856; margin: 0;">A product of Medecsta &copy; 2026<br>'
+            "www.medecsta.com</p>"
+        )
+        footer.setStyleSheet("font-size: 11px;")
+        footer.setAlignment(Qt.AlignmentFlag.AlignRight)
 
         self.help_panel = HelpPanel()
         self.help_panel.hide()
@@ -146,7 +184,12 @@ class MainWindow(QMainWindow):
         self._splitter.addWidget(self.help_panel)
         self._splitter.setStretchFactor(0, 1)
         self._splitter.setStretchFactor(1, 0)
-        central_layout.addWidget(self._splitter)
+        # Stretch factor 1: the splitter's own vertical size policy is
+        # Preferred, not Expanding, so without this the footer (added after
+        # it) leaves the leftover window height as a dead gray gap above
+        # itself instead of the splitter growing to fill it.
+        central_layout.addWidget(self._splitter, 1)
+        central_layout.addWidget(footer)
 
         self.setCentralWidget(central)
 
@@ -157,6 +200,16 @@ class MainWindow(QMainWindow):
 
     def _toggle_help_panel(self, checked: bool) -> None:
         self.help_panel.setVisible(checked)
+
+    def _show_about(self) -> None:
+        QMessageBox.about(
+            self, "About PKecsta",
+            "<b>PKecsta</b><br>A product of Medecsta<br><br>"
+            "Developed by Rayiti Ramakrishna, PharmD<br>"
+            "PhD Candidate, CSIR-CDRI<br><br>"
+            "Built with the assistance of Claude (Anthropic).<br><br>"
+            "For more info visit www.Medecsta.com",
+        )
 
     def _set_manual_mode(self, manual: bool) -> None:
         self.mode_toggle.setText("Automatic Mode" if manual else "Manual Mode")
@@ -257,6 +310,10 @@ class MainWindow(QMainWindow):
         grid_row.addWidget(acquire_btn, alignment=Qt.AlignmentFlag.AlignTop)
         layout.addLayout(grid_row)
 
+        self.acquire_hint = QLabel("Data must be acquired to proceed to next steps.")
+        self.acquire_hint.setStyleSheet("color: #DC2626; font-weight: bold;")
+        layout.addWidget(self.acquire_hint)
+
         # Route/dose are set once above, not per row — hide those grid
         # columns and keep them in sync automatically as the fields change.
         self.grid.hide_column("route")
@@ -315,6 +372,8 @@ class MainWindow(QMainWindow):
 
     def _set_dataset(self, ds: Dataset) -> None:
         self.dataset = ds
+        self.acquire_hint.setText("Data acquired. Go to NCA Tab.")
+        self.acquire_hint.setStyleSheet("color: #16A34A; font-weight: bold;")
         # The data came out of the grid, so writing it straight back is a
         # second full repopulation for no visible change — and populating a
         # QTableWidget is O(rows x columns) widget items, which froze the UI
@@ -418,10 +477,6 @@ class MainWindow(QMainWindow):
             self.nca_steady_state, tau_label, self.nca_tau,
         ]
 
-        export_btn = QPushButton("Export Core Output...")
-        export_btn.setToolTip("Save the last run's full settings, results, and warnings to a text file.")
-        export_btn.clicked.connect(self._export_nca_core_output)
-        ss_row.addWidget(export_btn)
         layout.addLayout(ss_row)
 
         splitter = QSplitter()
@@ -429,6 +484,17 @@ class MainWindow(QMainWindow):
         self.nca_plot = ConcTimePlot()
         splitter.addWidget(self.nca_results)
         splitter.addWidget(self.nca_plot)
+
+        # Lives in the plot's own toolbar, right next to Export Plot, since
+        # both are "export this result" actions and belong together.
+        export_btn = QPushButton("Export Core Output...")
+        export_btn.setToolTip("Save the last run's full settings, results, and warnings.")
+        export_btn.clicked.connect(self._export_nca_core_output)
+        self.nca_core_output_format = QComboBox()
+        self.nca_core_output_format.addItems(list(CORE_OUTPUT_FORMATS))
+        self.nca_core_output_format.setToolTip("File format for Export Core Output.")
+        self.nca_plot.add_toolbar_widget(export_btn)
+        self.nca_plot.add_toolbar_widget(self.nca_core_output_format)
         layout.addWidget(splitter)
         return widget
 
@@ -578,12 +644,37 @@ class MainWindow(QMainWindow):
         if not getattr(self, "_nca_last_result", None):
             QMessageBox.warning(self, "No results", "Run NCA first.")
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Export Core Output", "nca_core_output.txt", "Text files (*.txt)")
+        fmt = self.nca_core_output_format.currentText()
+        ext, file_filter = CORE_OUTPUT_FORMATS[fmt]
+        path, _ = QFileDialog.getSaveFileName(self, "Export Core Output", f"nca_core_output.{ext}", file_filter)
         if not path:
             return
-        text = nca.format_core_output(self._nca_last_result, self._nca_last_settings, self._nca_last_units)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(text)
+        # pandas' Excel writer (unlike its reader) validates the path's
+        # extension against the engine regardless of engine= being passed
+        # explicitly — force it to match the chosen format rather than
+        # trust whatever the save dialog handed back.
+        if not path.lower().endswith(f".{ext}"):
+            path = f"{path}.{ext}"
+
+        if fmt == "Text":
+            text = nca.format_core_output(self._nca_last_result, self._nca_last_settings, self._nca_last_units)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+            return
+
+        rows = nca.core_output_rows(self._nca_last_result, self._nca_last_settings, self._nca_last_units)
+        warnings = nca.core_output_warnings(self._nca_last_result)
+        df = pd.DataFrame(rows, columns=["Section", "Parameter", "Value", "Unit"])
+        if warnings:
+            df = pd.concat([df, pd.DataFrame({
+                "Section": "Warnings", "Parameter": "", "Value": warnings, "Unit": "",
+            })], ignore_index=True)
+        if fmt == "CSV":
+            df.to_csv(path, index=False)
+        else:
+            # engine named explicitly rather than inferred from the path's
+            # extension — same reasoning as the plot export's format= arg.
+            df.to_excel(path, index=False, engine="openpyxl")
 
     # ---------- Compartmental tab ----------
     def _build_compartmental_tab(self) -> QWidget:
@@ -751,6 +842,18 @@ def _build_model_spec(n_comp: str, route: str, t: np.ndarray, c: np.ndarray, dos
             [k_guess * 5, k_guess, v_guess],
             ([1e-8, 1e-8, 1e-8], [50, 10, v_guess * 100]),
             ["ka", "k", "V"],
+        )
+    if n_comp == "1c" and route == "extravascular_tlag":
+        tlag_guess = float(t[c > 0].min()) * 0.5 if np.any(c > 0) else 0.0
+
+        def extravascular_tlag_model(tt, ka, k, V, tlag, _dose=dose):
+            return models.conc_1c_extravascular(tt, ka, k, V, _dose, tlag)
+
+        return (
+            extravascular_tlag_model,
+            [k_guess * 5, k_guess, v_guess, tlag_guess],
+            ([1e-8, 1e-8, 1e-8, 0.0], [50, 10, v_guess * 100, t.max()]),
+            ["ka", "k", "V", "tlag"],
         )
     if n_comp == "2c" and route == "iv_bolus":
         return (
