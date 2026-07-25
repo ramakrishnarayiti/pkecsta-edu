@@ -67,9 +67,15 @@ def _interp_conc(t0: float, c0: float, t1: float, c1: float, t: float) -> float:
 
 def _point_conc(time: np.ndarray, conc: np.ndarray, t: float) -> float:
     """Concentration at t: exact if t is an observed point, else
-    interpolated between the bracketing pair."""
+    interpolated between the bracketing pair. Outside the observed range it
+    clamps to the nearest endpoint — never extrapolates, never indexes off
+    the end of the array (a Tau past the last sample used to IndexError)."""
+    if t <= time[0]:
+        return float(conc[0])
+    if t >= time[-1]:
+        return float(conc[-1])
     idx = int(np.searchsorted(time, t))
-    if idx < len(time) and time[idx] == t:
+    if time[idx] == t:
         return float(conc[idx])
     return _interp_conc(time[idx - 1], conc[idx - 1], time[idx], conc[idx], t)
 
@@ -133,9 +139,45 @@ def aumc_linear(time: np.ndarray, conc: np.ndarray) -> float:
     return float(np.trapezoid(moment, time))
 
 
+def _log_segment_ok(c0: float, c1: float) -> bool:
+    """Log-trapezoid is only defined for two positive, unequal
+    concentrations — every other segment falls back to linear."""
+    return c0 > 0 and c1 > 0 and c0 != c1
+
+
+def _aumc_segments(time: np.ndarray, conc: np.ndarray, use_log) -> float:
+    """AUMC summed segment by segment, log-moment formula on segments where
+    use_log(c0, c1) holds. Log-moment term is the exact integral of t*C(t)
+    for a log-linear C between the two points:
+        dt*(t0*C0 - t1*C1)/ln(C0/C1) + dt^2*(C0 - C1)/ln(C0/C1)^2
+    """
+    total = 0.0
+    for i in range(len(time) - 1):
+        t0, t1 = float(time[i]), float(time[i + 1])
+        c0, c1 = float(conc[i]), float(conc[i + 1])
+        dt = t1 - t0
+        if use_log(c0, c1):
+            ln = np.log(c0 / c1)
+            total += dt * (t0 * c0 - t1 * c1) / ln + dt ** 2 * (c0 - c1) / ln ** 2
+        else:
+            total += (t0 * c0 + t1 * c1) * dt / 2.0
+    return float(total)
+
+
+def aumc_linear_up_log_down(time: np.ndarray, conc: np.ndarray) -> float:
+    """AUMC partner of auc_linear_up_log_down — log moment while declining."""
+    return _aumc_segments(time, conc, lambda c0, c1: _log_segment_ok(c0, c1) and c1 < c0)
+
+
+def aumc_linear_log(time: np.ndarray, conc: np.ndarray) -> float:
+    """AUMC partner of auc_linear_log — log moment on every valid segment."""
+    return _aumc_segments(time, conc, _log_segment_ok)
+
+
 def lambda_z(time: np.ndarray, conc: np.ndarray, n_points: int | None = None,
              t_range: tuple[float, float] | None = None,
-             excluded_times: set[float] | None = None) -> dict:
+             excluded_times: set[float] | None = None,
+             exclude_pre_tmax: bool = False) -> dict:
     """Terminal elimination rate constant via OLS log-linear regression.
 
     If t_range is given (start, end), fits only points within that time
@@ -145,6 +187,12 @@ def lambda_z(time: np.ndarray, conc: np.ndarray, n_points: int | None = None,
     Auto-selection is a heuristic — callers doing research-grade work
     should let the user override via the UI, never trust this blindly.
 
+    exclude_pre_tmax drops every point at or before Tmax before the Best Fit
+    search (Guide p.135) — for extravascular/infusion routes the absorption
+    limb is not part of the terminal phase, and letting the search reach
+    back into it silently biases lambda_z. Ignored in Time Range and
+    explicit-n_points modes: there the user already chose the window.
+
     excluded_times drops those time points from the regression only —
     callers must still use the original, unfiltered time/conc for
     AUC/AUMC; this function never touches those.
@@ -153,7 +201,13 @@ def lambda_z(time: np.ndarray, conc: np.ndarray, n_points: int | None = None,
     t = time[mask]
     c = conc[mask]
     empty = {"lambda_z": None, "half_life": None, "n_points": 0, "r_squared": None,
-             "slope": None, "intercept": None, "terminal_t": None, "terminal_conc": None}
+             "adj_r_squared": None, "slope": None, "intercept": None,
+             "terminal_t": None, "terminal_conc": None}
+
+    if exclude_pre_tmax and t_range is None and n_points is None and len(t):
+        tmax = t[int(np.argmax(c))]
+        keep = t > tmax
+        t, c = t[keep], c[keep]
 
     if excluded_times:
         keep = ~np.isin(t, list(excluded_times))
@@ -183,16 +237,31 @@ def lambda_z(time: np.ndarray, conc: np.ndarray, n_points: int | None = None,
         t_used, c_used = t[in_range], c[in_range]
     elif n_points is not None:
         n = min(n_points, len(t))
+        if n < MIN_TERMINAL_POINTS:
+            return empty  # same floor the other two modes enforce
         best = fit_points(t[-n:], log_c[-n:])
         t_used, c_used = t[-n:], c[-n:]
     else:
         candidates = [fit_points(t[-n:], log_c[-n:]) for n in range(MIN_TERMINAL_POINTS, len(t) + 1)]
-        best = max(candidates, key=lambda r: r["adj_r2"])
+        top = max(candidates, key=lambda r: r["adj_r2"])
+        # WinNonlin tie-break (Guide p.136): adding a point has to improve
+        # adjusted R^2 by more than 0.0001 to matter — among everything
+        # within that tolerance of the best, take the fit using the most
+        # points. Plain max() would silently settle for the minimum 3 points
+        # on a clean log-linear tail, where every candidate scores 1.0.
+        best = max((r for r in candidates if r["adj_r2"] > top["adj_r2"] - 1e-4),
+                    key=lambda r: r["n"])
         t_used, c_used = t[-best["n"]:], c[-best["n"]:]
 
     slope = best["slope"]
-    if slope >= 0:
-        return {**empty, "n_points": best["n"], "r_squared": best["r2"]}
+    # A flat profile fits a slope of ~1e-16 instead of exactly 0, which would
+    # otherwise pass as "declining" and report a half-life of ~1e15 hours.
+    # Test the total log-concentration drop across the window rather than the
+    # slope itself — that stays scale-free in both time and concentration.
+    log_drop = -slope * (t_used[-1] - t_used[0])
+    if not np.isfinite(slope) or log_drop < 1e-10:
+        return {**empty, "n_points": best["n"], "r_squared": best["r2"],
+                "adj_r_squared": best["adj_r2"]}
 
     lz = -slope
     return {
@@ -200,6 +269,7 @@ def lambda_z(time: np.ndarray, conc: np.ndarray, n_points: int | None = None,
         "half_life": float(np.log(2) / lz),
         "n_points": int(best["n"]),
         "r_squared": float(best["r2"]),
+        "adj_r_squared": float(best["adj_r2"]),
         "slope": float(slope),
         "intercept": float(best["intercept"]),
         "terminal_t": t_used.tolist(),
@@ -226,7 +296,7 @@ def compute_flags(n_points: int, lz: dict, pct_extrap: float | None) -> dict:
     return {
         "flag_n_samples": flag_n_samples,
         "span": float(span),
-        "flag_low_rsq": bool(lz["r_squared"] < RSQ_ADJ_THRESHOLD),
+        "flag_low_rsq": bool(lz["adj_r_squared"] < RSQ_ADJ_THRESHOLD),
         "flag_high_extrap": bool(pct_extrap is not None and pct_extrap > PCT_EXTRAP_THRESHOLD),
         "flag_low_span": bool(span < SPAN_THRESHOLD),
     }
@@ -266,6 +336,10 @@ def steady_state_metrics(time: np.ndarray, conc: np.ndarray, tau: float,
         "cavg_ss": cavg_ss,
         "pct_fluctuation": pct_fluctuation,
         "accumulation_index": accumulation_index,
+        # Tau past the last sample means AUCtau covers a shorter window than
+        # the dosing interval, so Cavg/%Fluctuation are biased low. Reported,
+        # never silently swallowed.
+        "flag_tau_beyond_tlast": bool(tau > time[-1]),
     }
 
 
@@ -274,6 +348,15 @@ AUC_METHODS = {
     "linear_up_log_down": auc_linear_up_log_down,
     "linear_log": auc_linear_log,
     "linear_interp": auc_linear_interp,
+}
+
+# AUMC must use the same interpolation rule as AUC — a log-down AUC paired
+# with a linear AUMC gives an internally inconsistent MRT (and so Vss).
+AUMC_METHODS = {
+    "linear": aumc_linear,
+    "linear_up_log_down": aumc_linear_up_log_down,
+    "linear_log": aumc_linear_log,
+    "linear_interp": aumc_linear,
 }
 
 
@@ -311,29 +394,57 @@ def _nca_common(time: np.ndarray, conc: np.ndarray, dose: float, n_terminal, auc
     time = np.asarray(time, dtype=float)
     conc = np.asarray(conc, dtype=float)
 
-    # Bolus: insert a back-extrapolated C0 at t=0 if the first observation
-    # isn't already at t=0 (Guide p.134 t=0 insertion rule) — Cmax/Tmax/AUC
-    # all see the inserted point, since C0 can exceed the first observed
-    # concentration.
+    # BQL / missing / blank cells arrive as NaN. Dropping them here is the
+    # only place it can be done once for every route — left in, a single NaN
+    # silently turns AUC, AUMC, CL, Vz and every derived parameter into NaN.
+    finite = np.isfinite(time) & np.isfinite(conc)
+    n_excluded = int((~finite).sum())
+    time, conc = time[finite], conc[finite]
+
+    # Guide p.134: profiles are analyzed in ascending time order. Callers
+    # usually sort already; a pure function shouldn't rely on that.
+    order = np.argsort(time, kind="stable")
+    time, conc = time[order], conc[order]
+
+    if len(time) == 0:
+        return {"cmax": None, "tmax": None, "route": route, "dose": dose,
+                "n_excluded": n_excluded, "flag_n_samples": "Insufficient",
+                "note": "no usable (finite) concentration-time points"}
+
+    # t=0 insertion (Guide p.134). Which concentration goes in depends on
+    # the situation, and getting it wrong silently moves AUC:
+    #   IV bolus      -> back-extrapolated C0 (can exceed the first sample)
+    #   steady state  -> Cmin, the trough the interval starts from
+    #   otherwise     -> 0, since no drug is in plasma before an
+    #                    extravascular dose or the start of an infusion
+    # Skipping this for non-bolus routes understated early AUC for every
+    # profile whose first sample wasn't drawn at t=0.
     pct_back_ext = None
-    if route == "iv_bolus" and time[0] != 0:
-        c0 = bolus_c0(time, conc)
-        back_ext_segment = (c0 + conc[0]) * time[0] / 2.0
+    back_ext_segment = None
+    if time[0] != 0:
+        if route == "iv_bolus":
+            c_at_zero = bolus_c0(time, conc)
+            back_ext_segment = (c_at_zero + conc[0]) * time[0] / 2.0
+        elif tau is not None:
+            # Cmin of the dosing interval, not of the whole record. A profile
+            # sampled past Tau (say 24h of data against a 12h interval) would
+            # otherwise seed t=0 with a trough from a later interval, which
+            # then also becomes the reported Cmin_ss.
+            in_interval = conc[time <= tau]
+            c_at_zero = float(np.min(in_interval)) if len(in_interval) else float(np.min(conc))
+        else:
+            c_at_zero = 0.0
         time = np.concatenate(([0.0], time))
-        conc = np.concatenate(([c0], conc))
-    else:
-        back_ext_segment = None
+        conc = np.concatenate(([c_at_zero], conc))
 
     result = cmax_tmax(time, conc)
 
     auc_fn = AUC_METHODS.get(auc_method, auc_linear)
     auc_t = auc_fn(time, conc)
-    aumc_t = aumc_linear(time, conc)
+    aumc_t = AUMC_METHODS.get(auc_method, aumc_linear)(time, conc)
 
-    if back_ext_segment is not None and auc_t:
-        pct_back_ext = back_ext_segment / auc_t * 100.0
-
-    lz = lambda_z(time, conc, n_terminal, t_range=lz_t_range, excluded_times=lz_excluded_times)
+    lz = lambda_z(time, conc, n_terminal, t_range=lz_t_range, excluded_times=lz_excluded_times,
+                  exclude_pre_tmax=(route != "iv_bolus"))
     result.update(lz)
 
     clast = float(conc[-1])
@@ -361,6 +472,13 @@ def _nca_common(time: np.ndarray, conc: np.ndarray, dose: float, n_terminal, auc
     else:
         auc_inf = aumc_inf = cl = vz = vss = mrt = auc_inf_pred = pct_extrap = None
 
+    # %Back_Ext is the back-extrapolated slice as a fraction of AUCINF
+    # (WinNonlin definition); AUClast is only the fallback when lambda_z —
+    # and so AUCINF — isn't estimable.
+    if back_ext_segment is not None:
+        denom = auc_inf if auc_inf else auc_t
+        pct_back_ext = back_ext_segment / denom * 100.0 if denom else None
+
     # Weight-normalized (mg/kg) params — only when a body weight is given.
     if weight:
         dose_per_kg = dose / weight
@@ -386,6 +504,7 @@ def _nca_common(time: np.ndarray, conc: np.ndarray, dose: float, n_terminal, auc
         "vss": vss,
         "mrt": mrt,
         "dose": dose,
+        "n_excluded": n_excluded,
         "dose_per_kg": dose_per_kg,
         "cl_per_kg": cl_per_kg,
         "vz_per_kg": vz_per_kg,
@@ -404,6 +523,8 @@ _FLAG_MESSAGES = {
     "flag_low_rsq": lambda r: f"Terminal-phase R-squared below {RSQ_ADJ_THRESHOLD} — lambda_z fit may be unreliable." if r.get("flag_low_rsq") else None,
     "flag_high_extrap": lambda r: f"AUC extrapolated fraction above {PCT_EXTRAP_THRESHOLD}% — AUCINF may be unreliable." if r.get("flag_high_extrap") else None,
     "flag_low_span": lambda r: f"Terminal phase spans fewer than {SPAN_THRESHOLD} half-lives — lambda_z estimate may be unreliable." if r.get("flag_low_span") else None,
+    "n_excluded": lambda r: f"{r['n_excluded']} sample(s) excluded as missing/BQL (non-numeric time or concentration)." if r.get("n_excluded") else None,
+    "flag_tau_beyond_tlast": lambda r: "Tau extends past the last sample — AUCtau covers a shorter window than the dosing interval, so Cavg_ss and %Fluctuation are biased low." if r.get("flag_tau_beyond_tlast") else None,
 }
 
 

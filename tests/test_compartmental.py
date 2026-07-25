@@ -122,3 +122,71 @@ def test_2c_iv_bolus_recovers_true_hybrid_params_and_micro_constants():
     beta_check = (sum_k - disc) / 2
     assert alpha_check == pytest.approx(true_alpha, rel=1e-3)
     assert beta_check == pytest.approx(true_beta, rel=1e-3)
+
+
+# ---- log-transformed residuals ----
+
+def test_log_residuals_recover_true_params_on_noise_free_data():
+    true_k, true_V, dose = 0.2, 10.0, 100.0
+    t = np.linspace(0.1, 24, 12)
+    y = conc_1c_iv_bolus(t, true_k, true_V, dose)
+
+    model = partial(conc_1c_iv_bolus, dose=dose)
+    result = fit_model(model, t, y, p0=[0.1, 5.0], bounds=([1e-6, 1e-6], [10, 100]),
+                        param_names=["k", "V"], log_residuals=True)
+
+    assert result["params"]["k"] == pytest.approx(true_k, rel=1e-4)
+    assert result["params"]["V"] == pytest.approx(true_V, rel=1e-4)
+    assert result["fit_scale"] == "log"
+
+
+def test_log_residuals_fit_the_terminal_phase_better_than_linear_scale():
+    # Proportional noise across four orders of magnitude: on a linear scale
+    # the early points dominate the objective and the tail is fitted badly.
+    # That is the whole reason the option exists.
+    true_k, true_V, dose = 0.2, 10.0, 100.0
+    t = np.linspace(0.5, 48, 20)
+    rng = np.random.default_rng(0)
+    y = conc_1c_iv_bolus(t, true_k, true_V, dose) * (1 + 0.1 * rng.standard_normal(len(t)))
+
+    model = partial(conc_1c_iv_bolus, dose=dose)
+    kwargs = dict(p0=[0.1, 5.0], bounds=([1e-6, 1e-6], [10, 100]), param_names=["k", "V"])
+    linear = fit_model(model, t, y, **kwargs)
+    logged = fit_model(model, t, y, log_residuals=True, **kwargs)
+
+    tail = t > 24
+    def tail_relative_error(fit):
+        pred = conc_1c_iv_bolus(t, fit["params"]["k"], fit["params"]["V"], dose)
+        return float(np.mean(np.abs(pred[tail] - y[tail]) / y[tail]))
+
+    assert tail_relative_error(logged) < tail_relative_error(linear)
+
+
+def test_log_residuals_drop_non_positive_observations():
+    true_k, true_V, dose = 0.2, 10.0, 100.0
+    t = np.linspace(0.1, 24, 12)
+    y = conc_1c_iv_bolus(t, true_k, true_V, dose)
+    y[-1] = 0.0  # a BQL value reported as zero
+
+    model = partial(conc_1c_iv_bolus, dose=dose)
+    result = fit_model(model, t, y, p0=[0.1, 5.0], bounds=([1e-6, 1e-6], [10, 100]),
+                        param_names=["k", "V"], log_residuals=True)
+
+    assert result["n_excluded"] == 1
+    assert result["params"]["k"] == pytest.approx(true_k, rel=1e-4)
+    # plotting arrays still cover every original time point
+    assert len(result["predicted"]) == len(t)
+    assert len(result["residuals"]) == len(t)
+
+
+def test_linear_scale_fit_is_unchanged_and_reports_its_scale():
+    true_k, true_V, dose = 0.2, 10.0, 100.0
+    t = np.linspace(0.1, 24, 12)
+    y = conc_1c_iv_bolus(t, true_k, true_V, dose)
+
+    model = partial(conc_1c_iv_bolus, dose=dose)
+    result = fit_model(model, t, y, p0=[0.1, 5.0], bounds=([1e-6, 1e-6], [10, 100]),
+                        param_names=["k", "V"])
+    assert result["fit_scale"] == "linear"
+    assert result["n_excluded"] == 0
+    assert result["r_squared"] == pytest.approx(1.0, abs=1e-6)

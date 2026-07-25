@@ -68,7 +68,10 @@ class DataGrid(QTableWidget):
         text = QApplication.clipboard().text()
         if not text:
             return
-        start = self.currentRow(), self.currentColumn()
+        # With no cell selected both return -1, and setItem(-1, ...) is a
+        # silent no-op in Qt — the paste would vanish with no error. Land at
+        # the top-left instead.
+        start = max(self.currentRow(), 0), max(self.currentColumn(), 0)
         for r, line in enumerate(text.strip("\n").split("\n")):
             row = start[0] + r
             while row >= self.rowCount():

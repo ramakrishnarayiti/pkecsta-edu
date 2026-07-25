@@ -18,11 +18,15 @@ from pkpd.pk.nca import (
     auc_linear_interp,
     auc_linear_log,
     auc_linear_up_log_down,
+    aumc_linear,
+    aumc_linear_up_log_down,
     bolus_c0,
     compute_flags,
     format_core_output,
     lambda_z,
+    nca_extravascular,
     nca_iv_bolus,
+    nca_iv_infusion,
     steady_state_metrics,
 )
 
@@ -312,14 +316,14 @@ def test_flag_n_samples_ok_and_span_computed_for_valid_profile():
 
 
 def test_compute_flags_flags_low_rsq_directly():
-    lz = {"lambda_z": 0.1, "half_life": 6.93, "terminal_t": [0.0, 4.0], "r_squared": 0.5}
+    lz = {"lambda_z": 0.1, "half_life": 6.93, "terminal_t": [0.0, 4.0], "r_squared": 0.5, "adj_r_squared": 0.5}
     flags = compute_flags(n_points=5, lz=lz, pct_extrap=5.0)
     assert flags["flag_low_rsq"] is True
     assert flags["flag_high_extrap"] is False
 
 
 def test_compute_flags_flags_high_extrap_directly():
-    lz = {"lambda_z": 0.1, "half_life": 6.93, "terminal_t": [0.0, 20.0], "r_squared": 0.95}
+    lz = {"lambda_z": 0.1, "half_life": 6.93, "terminal_t": [0.0, 20.0], "r_squared": 0.95, "adj_r_squared": 0.95}
     flags = compute_flags(n_points=5, lz=lz, pct_extrap=25.0)
     assert flags["flag_high_extrap"] is True
     assert flags["flag_low_span"] is False  # span = 20/6.93 ~= 2.89 >= 2
@@ -339,7 +343,7 @@ def test_format_core_output_includes_settings_and_results():
 
 
 def test_format_core_output_reports_no_warnings_for_clean_profile():
-    lz = {"lambda_z": 0.1, "half_life": 6.93, "terminal_t": [0.0, 20.0], "r_squared": 0.99}
+    lz = {"lambda_z": 0.1, "half_life": 6.93, "terminal_t": [0.0, 20.0], "r_squared": 0.99, "adj_r_squared": 0.99}
     flags = compute_flags(n_points=10, lz=lz, pct_extrap=5.0)
     result = {**flags}
     text = format_core_output(result, settings={})
@@ -353,3 +357,185 @@ def test_format_core_output_reports_warning_for_flagged_profile():
     result = nca_iv_bolus(t, c, dose=500.0)  # too few points -> Insufficient
     text = format_core_output(result, settings={})
     assert "Insufficient samples" in text
+
+
+# ---- AUMC follows the chosen AUC method ----
+
+def test_log_down_aumc_matches_analytical_aumc_inf():
+    # For C(t) = C0*exp(-k*t): AUMC(0-inf) = C0/k^2, and the log-moment
+    # trapezoid is exact between any two points on that curve — so the
+    # extrapolated total must hit the closed form to float precision.
+    t, c = exponential_curve()
+    aumc_t = aumc_linear_up_log_down(t, c)
+    clast, tlast = c[-1], t[-1]
+    aumc_inf = aumc_t + (clast * tlast) / K + clast / K ** 2
+    assert aumc_inf == pytest.approx(C0 / K ** 2, rel=1e-9)
+
+
+def test_linear_and_log_down_aumc_differ_on_a_declining_profile():
+    # Direction isn't fixed (t*C is not monotone), but the two rules must
+    # not silently collapse into the same number — that was the bug: AUMC
+    # was always linear regardless of the AUC method chosen.
+    t, c = exponential_curve(n=4)
+    assert aumc_linear(t, c) != pytest.approx(aumc_linear_up_log_down(t, c))
+
+
+def test_nca_uses_matching_aumc_for_the_selected_auc_method():
+    t, c = exponential_curve()
+    log_down = nca_iv_bolus(t, c, dose=500.0, auc_method="linear_up_log_down")
+    linear = nca_iv_bolus(t, c, dose=500.0, auc_method="linear")
+    assert log_down["aumc_t"] == pytest.approx(aumc_linear_up_log_down(t, c))
+    assert linear["aumc_t"] == pytest.approx(aumc_linear(t, c))
+    # MRT for a 1-compartment bolus is exactly 1/k; only the consistent
+    # log-down pairing recovers it.
+    assert log_down["mrt"] == pytest.approx(1.0 / K, rel=1e-9)
+
+
+# ---- Best Fit excludes the absorption limb for non-bolus routes ----
+
+def test_best_fit_lambda_z_ignores_pre_tmax_points_extravascular():
+    # Absorption limb then clean log-linear decay. Including the rising
+    # points would drag lambda_z away from the true terminal K.
+    t = np.array([0.0, 0.5, 1.0, 2.0, 4.0, 8.0, 12.0, 24.0])
+    c = np.array([0.0, 30.0, 50.0, 60.0, *(60.0 * np.exp(-K * (t[4:] - 2.0)))])
+    result = nca_extravascular(t, c, dose=500.0, auc_method="linear_up_log_down")
+    assert result["lambda_z"] == pytest.approx(K, rel=1e-9)
+    assert min(result["terminal_t"]) > result["tmax"]
+
+
+def test_iv_bolus_best_fit_still_allows_the_first_point():
+    t, c = exponential_curve()
+    result = nca_iv_bolus(t, c, dose=500.0, auc_method="linear_up_log_down")
+    assert result["n_points"] == len(t)  # whole curve is the terminal phase
+
+
+def test_explicit_time_range_overrides_pre_tmax_exclusion():
+    t = np.array([0.0, 1.0, 2.0, 4.0, 8.0, 12.0])
+    c = np.array([1.0, 40.0, 60.0, 30.0, 12.0, 5.0])
+    result = nca_extravascular(t, c, dose=500.0, lz_t_range=(1.0, 12.0))
+    assert min(result["terminal_t"]) == pytest.approx(1.0)
+
+
+# ---- degenerate / missing data ----
+
+def test_nan_concentrations_are_excluded_not_propagated():
+    t, c = exponential_curve()
+    c = c.copy()
+    c[3] = np.nan  # a BQL/blank cell
+    result = nca_iv_bolus(t, c, dose=500.0, auc_method="linear_up_log_down")
+    assert result["n_excluded"] == 1
+    assert np.isfinite(result["auc_t"])
+    assert np.isfinite(result["cl"])
+    assert "excluded as missing/BQL" in format_core_output(result, settings={})
+
+
+def test_all_missing_profile_returns_a_result_instead_of_crashing():
+    result = nca_iv_bolus(np.array([0.0, 1.0]), np.array([np.nan, np.nan]), dose=500.0)
+    assert result["cmax"] is None
+    assert result["flag_n_samples"] == "Insufficient"
+
+
+def test_single_point_profile_still_reports_cmax():
+    result = nca_iv_bolus(np.array([2.0]), np.array([10.0]), dose=500.0)
+    assert result["cmax"] == pytest.approx(10.0)
+    assert result["lambda_z"] is None
+
+
+def test_unsorted_input_is_sorted_before_analysis():
+    t, c = exponential_curve()
+    order = np.array([3, 0, 5, 1, 7, 2, 6, 4])
+    shuffled = nca_iv_bolus(t[order], c[order], dose=500.0, auc_method="linear_up_log_down")
+    straight = nca_iv_bolus(t, c, dose=500.0, auc_method="linear_up_log_down")
+    assert shuffled["auc_t"] == pytest.approx(straight["auc_t"])
+    assert shuffled["lambda_z"] == pytest.approx(straight["lambda_z"])
+
+
+def test_tau_past_last_sample_is_flagged_not_an_index_error():
+    t = np.array([0.0, 1.0, 2.0, 4.0, 8.0])
+    c = np.array([20.0, 45.0, 38.0, 25.0, 12.0])
+    result = steady_state_metrics(t, c, tau=24.0, auc_method="linear", lambda_z_value=0.2)
+    assert result["flag_tau_beyond_tlast"] is True
+    assert result["ctau"] == pytest.approx(12.0)  # clamped to Clast, not extrapolated
+
+
+def test_tau_within_profile_is_not_flagged():
+    t = np.array([0.0, 1.0, 2.0, 4.0, 8.0, 12.0])
+    c = np.array([20.0, 45.0, 38.0, 25.0, 12.0, 8.0])
+    result = steady_state_metrics(t, c, tau=12.0, auc_method="linear", lambda_z_value=0.2)
+    assert result["flag_tau_beyond_tlast"] is False
+
+
+# ---- t=0 insertion rules (Guide p.134) ----
+
+def test_extravascular_inserts_zero_at_t0_when_first_sample_is_later():
+    # No drug in plasma before an oral dose, so the (0, t1) triangle is part
+    # of AUC. Omitting it understates early AUC for every profile not
+    # sampled at t=0.
+    t = np.array([1.0, 2.0, 4.0, 8.0, 12.0, 24.0])
+    c = np.array([30.0, 50.0, 60.0, 30.0, 12.0, 5.0])
+    result = nca_extravascular(t, c, dose=500.0, auc_method="linear")
+
+    missing_triangle = (0.0 + 30.0) / 2 * 1.0
+    assert result["auc_t"] == pytest.approx(np.trapezoid(c, t) + missing_triangle)
+    assert result["cmax"] == pytest.approx(60.0)  # inserted zero can't be Cmax
+
+
+def test_extravascular_leaves_profile_alone_when_it_already_starts_at_t0():
+    t = np.array([0.0, 1.0, 2.0, 4.0, 8.0])
+    c = np.array([0.0, 30.0, 50.0, 30.0, 12.0])
+    result = nca_extravascular(t, c, dose=500.0, auc_method="linear")
+    assert result["auc_t"] == pytest.approx(np.trapezoid(c, t))
+
+
+def test_infusion_also_starts_from_zero_at_t0():
+    t = np.array([1.0, 2.0, 4.0, 8.0])
+    c = np.array([20.0, 30.0, 18.0, 6.0])
+    result = nca_iv_infusion(t, c, dose=500.0, infusion_duration=2.0, auc_method="linear")
+    assert result["auc_t"] == pytest.approx(np.trapezoid(c, t) + (0.0 + 20.0) / 2 * 1.0)
+
+
+def test_steady_state_inserts_cmin_at_t0_not_zero():
+    # At steady state the interval starts from the trough, not from zero.
+    t = np.array([1.0, 2.0, 4.0, 8.0, 12.0])
+    c = np.array([30.0, 50.0, 38.0, 20.0, 15.0])
+    result = nca_extravascular(t, c, dose=500.0, auc_method="linear", tau=12.0)
+
+    cmin = 15.0
+    assert result["auc_t"] == pytest.approx(np.trapezoid(c, t) + (cmin + 30.0) / 2 * 1.0)
+    assert result["cmin_ss"] == pytest.approx(cmin)
+
+
+def test_steady_state_cmin_comes_from_the_interval_not_the_whole_record():
+    # Sampling runs to 24h but the dosing interval is 12h. The trough at t=24
+    # belongs to a later interval and must not seed t=0 or become Cmin_ss.
+    t = np.array([1.0, 2.0, 4.0, 8.0, 12.0, 24.0])
+    c = np.array([30.0, 50.0, 38.0, 20.0, 16.0, 2.0])
+    result = nca_extravascular(t, c, dose=500.0, auc_method="linear", tau=12.0)
+    assert result["cmin_ss"] == pytest.approx(16.0)  # not 2.0
+
+
+def test_bolus_t0_insertion_still_uses_back_extrapolation_not_zero():
+    t = np.array([1.0, 2.0, 4.0, 8.0, 12.0, 24.0])
+    c = C0 * np.exp(-K * t)
+    result = nca_iv_bolus(t, c, dose=500.0, auc_method="linear_up_log_down")
+    assert result["cmax"] == pytest.approx(C0, rel=1e-9)  # C0 > first sample
+
+
+# ---- lambda_z explicit n_points floor ----
+
+def test_lambda_z_rejects_explicit_n_points_below_the_minimum():
+    t, c = exponential_curve()
+    assert lambda_z(t, c, n_points=2)["lambda_z"] is None
+    assert lambda_z(t, c, n_points=3)["lambda_z"] == pytest.approx(K, rel=1e-9)
+
+
+# ---- infusion MRT correction ----
+
+def test_infusion_mrt_subtracts_half_the_infusion_duration():
+    t, c = exponential_curve()
+    tinf = 2.0
+    bolus = nca_iv_bolus(t, c, dose=500.0, auc_method="linear_up_log_down")
+    infusion = nca_iv_infusion(t, c, dose=500.0, infusion_duration=tinf,
+                                auc_method="linear_up_log_down")
+    # same data, so the only MRT difference is the Tinf/2 correction
+    assert infusion["mrt"] == pytest.approx(bolus["mrt"] - tinf / 2.0, rel=1e-9)

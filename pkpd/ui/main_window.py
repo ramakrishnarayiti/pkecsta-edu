@@ -27,7 +27,15 @@ from PySide6.QtWidgets import (
 )
 
 from pkpd.core.data_model import Dataset, Route, ValidationError
-from pkpd.core.units import CONC_UNITS, DOSE_UNITS, TIME_UNITS, compartmental_units, nca_units
+from pkpd.core.units import (
+    CONC_UNITS,
+    DOSE_UNITS,
+    TIME_UNITS,
+    apply_compartmental_units,
+    apply_nca_units,
+    compartmental_units,
+    nca_units,
+)
 from pkpd.pk import nca
 from pkpd.pk.compartmental import fitting, models
 from pkpd.ui.grid_widget import DataGrid
@@ -192,17 +200,28 @@ class MainWindow(QMainWindow):
         unit_row.addWidget(QLabel("Units — Time:"))
         self.time_unit_combo = QComboBox()
         self.time_unit_combo.addItems(TIME_UNITS)
-        self.time_unit_combo.setToolTip("Unit the 'time' column is entered in. Labels results — doesn't convert.")
+        self.time_unit_combo.setToolTip(
+            "Unit the 'time' column is entered in. Every time-dimensioned result\n"
+            "(Tmax, half-life, MRT) is reported in this same unit."
+        )
         unit_row.addWidget(self.time_unit_combo)
         unit_row.addWidget(QLabel("Concentration:"))
         self.conc_unit_combo = QComboBox()
         self.conc_unit_combo.addItems(CONC_UNITS)
-        self.conc_unit_combo.setToolTip("Unit the 'concentration' column is entered in. Labels results — doesn't convert.")
+        self.conc_unit_combo.setToolTip(
+            "Unit the 'concentration' column is entered in. Its volume half also\n"
+            "sets the unit CL and volume parameters are reported in — pick ng/mL\n"
+            "and CL comes out in mL/hr, pick mg/L and it comes out in L/hr."
+        )
         unit_row.addWidget(self.conc_unit_combo)
         unit_row.addWidget(QLabel("Dose:"))
         self.dose_unit_combo = QComboBox()
         self.dose_unit_combo.addItems(DOSE_UNITS)
-        self.dose_unit_combo.setToolTip("Unit the dose is entered in. Labels results — doesn't convert.")
+        self.dose_unit_combo.setToolTip(
+            "Unit the dose is entered in. Reconciled with the concentration's mass\n"
+            "unit automatically, so a dose in mg against ng/mL still gives a\n"
+            "usable CL — no hand conversion needed."
+        )
         unit_row.addWidget(self.dose_unit_combo)
         unit_row.addStretch()
         layout.addLayout(unit_row)
@@ -412,8 +431,7 @@ class MainWindow(QMainWindow):
 
         manual = self.mode_toggle.isChecked()
 
-        weight_val = df["weight"].iloc[0] if "weight" in df.columns else None
-        weight = float(weight_val) if weight_val is not None and not pd.isna(weight_val) else None
+        weight = _num(df["weight"].iloc[0] if "weight" in df.columns else None, default=None)
 
         if not manual:
             # Automatic mode: fixed safe defaults, matching PLANNING.md's
@@ -458,7 +476,7 @@ class MainWindow(QMainWindow):
             "iv_bolus": partial(nca.nca_iv_bolus, auc_method=auc_method,
                                  lz_t_range=lz_t_range, lz_excluded_times=lz_excluded_times, tau=tau, weight=weight),
             "iv_infusion": lambda t, c, dose: nca.nca_iv_infusion(
-                t, c, dose, float(df["infusion_duration"].iloc[0] or 0.0), auc_method=auc_method,
+                t, c, dose, _num(df["infusion_duration"].iloc[0]), auc_method=auc_method,
                 lz_t_range=lz_t_range, lz_excluded_times=lz_excluded_times, tau=tau, weight=weight,
             ),
             "extravascular": partial(nca.nca_extravascular, auc_method=auc_method,
@@ -516,8 +534,13 @@ class MainWindow(QMainWindow):
         self.nca_run_btn.setEnabled(True)
         self.nca_run_btn.setText("Run NCA")
         QApplication.restoreOverrideCursor()
-        units = nca_units(self.time_unit_combo.currentText(), self.conc_unit_combo.currentText(),
-                           self.dose_unit_combo.currentText())
+        conc_unit = self.conc_unit_combo.currentText()
+        dose_unit = self.dose_unit_combo.currentText()
+        # CL/Vz/Vss come out of nca.py in raw dose-over-concentration units;
+        # rescale them onto the concentration's volume unit before anything
+        # displays or exports them, so the table and the Core Output agree.
+        result = apply_nca_units(result, conc_unit, dose_unit)
+        units = nca_units(self.time_unit_combo.currentText(), conc_unit, dose_unit)
         self.nca_results.set_results(result, units)
         terminal_line = None
         if result.get("slope") is not None:
@@ -564,6 +587,17 @@ class MainWindow(QMainWindow):
         self.comp_weight_combo = QComboBox()
         self.comp_weight_combo.addItems(["uniform", "inverse_y", "inverse_y2"])
         row.addWidget(self.comp_weight_combo)
+        self.comp_log_residuals = QCheckBox("Log residuals")
+        self.comp_log_residuals.setToolTip(
+            "Fit on log-concentration instead of concentration, so the early\n"
+            "high points stop dominating and the terminal phase is fitted well.\n"
+            "Replaces the weighting scheme (the transform is the stabilizer),\n"
+            "and drops any non-positive observation from the fit."
+        )
+        self.comp_log_residuals.toggled.connect(
+            lambda on: self.comp_weight_combo.setEnabled(not on)
+        )
+        row.addWidget(self.comp_log_residuals)
         self.comp_run_btn = QPushButton("Fit")
         self.comp_run_btn.clicked.connect(self._run_fit)
         row.addWidget(self.comp_run_btn)
@@ -589,7 +623,7 @@ class MainWindow(QMainWindow):
         t = df["time"].to_numpy(dtype=float)
         c = df["concentration"].to_numpy(dtype=float)
         dose = float(df["dose"].iloc[0])
-        tinf = float(df["infusion_duration"].iloc[0] or 0.0)
+        tinf = _num(df["infusion_duration"].iloc[0])
 
         n_comp, route = COMPARTMENTAL_CHOICES[self.comp_model_combo.currentText()]
         weight_scheme = self.comp_weight_combo.currentText()
@@ -610,7 +644,8 @@ class MainWindow(QMainWindow):
         self.comp_run_btn.setText("Fitting...")
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         self._comp_task = BackgroundTask(
-            fitting.fit_model, model, t, c, p0, bounds, weight_scheme, names
+            fitting.fit_model, model, t, c, p0, bounds, weight_scheme, names,
+            self.comp_log_residuals.isChecked(),
         )
         self._comp_task.finished.connect(self._on_fit_done)
         self._comp_task.error.connect(self._on_fit_error)
@@ -629,15 +664,26 @@ class MainWindow(QMainWindow):
         self.comp_run_btn.setEnabled(True)
         self.comp_run_btn.setText("Fit")
         QApplication.restoreOverrideCursor()
-        units = compartmental_units(self.time_unit_combo.currentText(), self.conc_unit_combo.currentText(),
-                                     self.dose_unit_combo.currentText())
-        self.comp_results.set_results(result, units)
+        conc_unit = self.conc_unit_combo.currentText()
+        dose_unit = self.dose_unit_combo.currentText()
+
+        # Predicted curve first: the model must be evaluated with the raw
+        # fitted parameters. Rescaled V/Cl would draw the wrong curve.
         t_fine = np.linspace(t.min(), t.max(), 200)
-        params = list(result["params"].values())
-        c_fitted = model(t_fine, *params)
+        c_fitted = model(t_fine, *result["params"].values())
+
+        units = compartmental_units(self.time_unit_combo.currentText(), conc_unit, dose_unit)
+        self.comp_results.set_results(apply_compartmental_units(result, conc_unit, dose_unit), units)
         self.comp_plot.plot_observed(t, c, fitted_t=t_fine, fitted_c=c_fitted,
                                       time_unit=self.time_unit_combo.currentText(),
                                       conc_unit=self.conc_unit_combo.currentText())
+
+
+def _num(value, default: float | None = 0.0) -> float | None:
+    """NaN-safe scalar read from a DataFrame cell. `float(nan) or 0.0`
+    returns nan — NaN is truthy — which used to leak a NaN infusion duration
+    straight into MRT/Vss with no error anywhere."""
+    return default if value is None or pd.isna(value) else float(value)
 
 
 def _coerce(value: str, dataset: Dataset):
