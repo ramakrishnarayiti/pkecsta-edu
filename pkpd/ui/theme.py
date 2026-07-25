@@ -110,7 +110,10 @@ QCheckBox {
     spacing: 6px;
 }
 
-QTableWidget {
+/* QTableView, not QTableWidget: the data grid is a plain view over a model
+   now, and QTableWidget inherits QTableView, so this one selector styles
+   both it and the results tables. */
+QTableView {
     background: white;
     color: #201f1d;
     gridline-color: #ececea;
@@ -134,7 +137,7 @@ QHeaderView::section {
     letter-spacing: 1px;
 }
 
-QTableWidget::item {
+QTableView::item {
     padding: 2px 4px;
 }
 

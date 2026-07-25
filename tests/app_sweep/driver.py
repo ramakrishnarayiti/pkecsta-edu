@@ -216,17 +216,20 @@ class Actions:
         assert grid.rowCount() < before
 
     def grid_paste(self, p):
+        grid = self.window.grid
         QApplication.clipboard().setText("1\t0.5\t42.0\n1\t1.0\t38.0")
-        self.window.grid.setCurrentCell(0, 0)
-        self.window.grid._paste_clipboard()
+        grid.set_current_cell(0, 0)
+        grid._paste_clipboard()
+        assert grid.cell(0, 1) == "0.5", "pasted value did not reach the model"
 
     def grid_paste_no_selection(self, p):
         grid = self.window.grid
-        QApplication.clipboard().setText("1\t0.5\t42.0")
-        grid.setCurrentCell(-1, -1)
+        QApplication.clipboard().setText("9\t0.5\t42.0")
+        grid.clearSelection()
+        grid.setCurrentIndex(grid.model().index(-1, -1))
         grid._paste_clipboard()
         # The paste must land somewhere rather than vanishing into row -1.
-        assert grid.item(0, 0) is not None
+        assert grid.cell(0, 0) == "9", "paste with no selection was discarded"
 
     def toggle_mode(self, p): self.window.mode_toggle.setChecked(bool(p["manual"]))
 
@@ -243,7 +246,7 @@ class Actions:
         self.window.dose_unit_combo.setCurrentText(p["dose"])
 
     def acquire_empty(self, p):
-        self.window.grid.setRowCount(0)
+        self.window.grid.clear_rows()
         self.window.grid.add_row()
         self.window.dataset = None
         self._loaded_file = None
