@@ -6,3 +6,9 @@ build/
 dist/
 *.spec
 reports/
+*.egg-info/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+.claude/
