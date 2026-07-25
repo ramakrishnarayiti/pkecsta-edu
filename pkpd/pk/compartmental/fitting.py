@@ -68,6 +68,16 @@ def fit_model(
     # negative, and 1/(a small negative) is a huge weight on an arbitrary
     # point. The log transform IS the variance stabilizer, so it replaces
     # the weighting scheme rather than stacking with it.
+    # Fewer observations than parameters is not a hard fit, it is an
+    # unanswerable one. curve_fit does not object when bounds push it onto
+    # the trust-region solver: it returns confident-looking estimates with a
+    # NaN R-squared and no covariance. Refuse it here instead.
+    if len(y_obs) < len(p0):
+        raise ValueError(
+            f"cannot fit {len(p0)} parameters to {len(y_obs)} usable observation(s) — "
+            "this profile has too few points for the selected model"
+        )
+
     w = np.ones_like(y_obs) if log_residuals else _weights(y_obs, weight_scheme)
     sigma = 1.0 / np.sqrt(w)
 
@@ -98,8 +108,22 @@ def fit_model(
     cv_pct = 100.0 * se / np.abs(popt)
 
     names = param_names or [f"p{i}" for i in range(k)]
+
+    # A parameter sitting on its bound means the optimizer wanted to go
+    # further and was stopped, so the estimate is an artefact of the bound
+    # rather than of the data — a flat profile fits k at its lower limit and
+    # otherwise looks like a perfectly ordinary result.
+    at_bounds: list[str] = []
+    if bounds is not None:
+        lower, upper = np.asarray(bounds[0], dtype=float), np.asarray(bounds[1], dtype=float)
+        span = np.where(np.isfinite(upper - lower), upper - lower, 1.0)
+        touching = (np.abs(popt - lower) <= 1e-6 * np.abs(span)) | \
+                   (np.abs(popt - upper) <= 1e-6 * np.abs(span))
+        at_bounds = [name for name, hit in zip(names, touching) if hit]
+
     return {
         "params": dict(zip(names, popt.tolist())),
+        "params_at_bounds": at_bounds,
         "param_se": dict(zip(names, se.tolist())),
         "param_cv_pct": dict(zip(names, cv_pct.tolist())),
         "r_squared": float(r_squared),

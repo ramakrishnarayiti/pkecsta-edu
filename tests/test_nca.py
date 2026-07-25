@@ -435,6 +435,21 @@ def test_all_missing_profile_returns_a_result_instead_of_crashing():
     assert result["flag_n_samples"] == "Insufficient"
 
 
+def test_degenerate_result_has_the_same_keys_as_a_normal_one():
+    """A degenerate profile must return the same shape as a good one, or
+    callers have to guess which keys exist. This is what keeps _NULL_RESULT
+    in step with the parameters _nca_common actually produces."""
+    t, c = exponential_curve()
+    normal = nca_iv_bolus(t, c, dose=500.0, weight=70.0)
+    degenerate = nca_iv_bolus(np.array([0.0, 1.0]), np.array([np.nan, np.nan]), dose=500.0)
+
+    # `note` only appears on the degenerate path; everything else must match.
+    assert set(normal) | {"note"} == set(degenerate)
+    for key in normal:
+        if key not in ("route", "dose", "n_excluded", "flag_n_samples", "n_points"):
+            assert degenerate[key] is None, f"{key} should be None on a degenerate profile"
+
+
 def test_single_point_profile_still_reports_cmax():
     result = nca_iv_bolus(np.array([2.0]), np.array([10.0]), dose=500.0)
     assert result["cmax"] == pytest.approx(10.0)

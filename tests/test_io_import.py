@@ -32,3 +32,26 @@ def test_dose_default_string_must_be_numeric_before_dataset_validation():
 
     ds = Dataset(filled)  # must not raise ValidationError
     assert (ds.data["dose"] == 500).all()
+
+
+# ---- column-name guessing ----
+
+def test_guess_column_matches_exact_name_first():
+    from pkpd.ui.import_wizard import guess_column
+    assert guess_column("concentration", ["conc", "concentration"]) == "concentration"
+
+
+def test_guess_column_handles_the_common_real_world_headers():
+    # The shipped Sample Data.xlsx uses exactly these, and mapped nothing
+    # but time before aliases existed.
+    from pkpd.ui.import_wizard import guess_column
+    columns = ["ID", "Time", "Conc", "dose", "route"]
+    assert guess_column("subject_id", columns) == "ID"
+    assert guess_column("time", columns) == "Time"
+    assert guess_column("concentration", columns) == "Conc"
+    assert guess_column("dose", columns) == "dose"
+
+
+def test_guess_column_returns_none_when_nothing_matches():
+    from pkpd.ui.import_wizard import guess_column
+    assert guess_column("concentration", ["alpha", "beta"]) is None

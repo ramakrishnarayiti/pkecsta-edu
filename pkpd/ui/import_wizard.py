@@ -27,6 +27,38 @@ FILE_REQUIRED_COLUMNS = ("time", "concentration")
 #  fixed up in the grid) instead of living in the file.
 FALLBACK_COLUMNS = ("route", "dose", "subject_id")
 
+#  Header names real files actually use. Exact-name matching alone fails on
+#  the most common spellings in the wild — a file with ID/Time/Conc columns
+#  mapped nothing but time, and the user had to set every dropdown by hand.
+#  Matching is case- and whitespace-insensitive; the user can still override
+#  every guess in the dropdowns.
+COLUMN_ALIASES = {
+    "subject_id": ("id", "subject", "subj", "subjid", "subject id", "subject_no",
+                    "animal", "animal id", "patient", "patient id", "usubjid"),
+    "time": ("t", "time", "tad", "time_hr", "nominal time", "actual time", "timepoint"),
+    "concentration": ("conc", "cp", "dv", "c", "concn", "result", "value",
+                       "concentration", "obs"),
+    "dose": ("dose", "amt", "amount", "dose_mg"),
+    "route": ("route", "adm", "administration", "dosing route"),
+    "infusion_duration": ("tinf", "duration", "inf_dur", "infusion duration",
+                           "infusion_time", "dur"),
+    "weight": ("wt", "weight", "bw", "bodyweight", "body weight"),
+}
+
+
+def guess_column(internal_col: str, source_columns) -> str | None:
+    """Best source column for an internal schema column, or None. Exact name
+    wins; otherwise the first alias that matches, in source order."""
+    normalized = {c: str(c).strip().lower() for c in source_columns}
+    for source, name in normalized.items():
+        if name == internal_col.lower():
+            return source
+    aliases = COLUMN_ALIASES.get(internal_col, ())
+    for source, name in normalized.items():
+        if name in aliases:
+            return source
+    return None
+
 
 class ImportWizard(QDialog):
     def __init__(self, parent: QWidget | None = None, default_route: str = "", default_dose: str = ""):
@@ -88,7 +120,7 @@ class ImportWizard(QDialog):
             combo.addItem("")
             combo.addItems(list(self._raw.columns))
             combo.setEnabled(True)
-            guess = next((c for c in self._raw.columns if c.strip().lower() == col.lower()), None)
+            guess = guess_column(col, self._raw.columns)
             if guess:
                 combo.setCurrentText(guess)
 

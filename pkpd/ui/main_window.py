@@ -68,6 +68,7 @@ class MainWindow(QMainWindow):
         # thread object gets garbage-collected mid-run.
         self._nca_task: BackgroundTask | None = None
         self._comp_task: BackgroundTask | None = None
+        self._comp_last_result: dict | None = None
 
         # Left nav list + stacked pages — mirrors the source design's
         # sidebar (PROJECT/ANALYSIS section list), not a browser tab strip.
@@ -296,8 +297,17 @@ class MainWindow(QMainWindow):
             )
 
     def _use_grid_data(self) -> None:
+        df = self.grid.to_dataframe()
+        if df.empty:
+            # An all-blank grid used to validate cleanly and load as a
+            # zero-row dataset, reporting "Loaded 0 rows" as though it had
+            # worked. Say what is actually wrong instead.
+            QMessageBox.warning(self, "No data",
+                                 "The grid is empty — enter or import rows with a time "
+                                 "and a concentration before acquiring.")
+            return
         try:
-            ds = Dataset(self.grid.to_dataframe())
+            ds = Dataset(df)
         except ValidationError as exc:
             QMessageBox.critical(self, "Validation error", "\n".join(exc.problems))
             return
@@ -305,7 +315,13 @@ class MainWindow(QMainWindow):
 
     def _set_dataset(self, ds: Dataset) -> None:
         self.dataset = ds
-        self.grid.load_dataframe(ds.data)
+        # The data came out of the grid, so writing it straight back is a
+        # second full repopulation for no visible change — and populating a
+        # QTableWidget is O(rows x columns) widget items, which froze the UI
+        # for ~10s on a 10k-row file. Only rewrite when validation actually
+        # dropped blank rows, which is the one case the user should see.
+        if len(ds.data) != self.grid.rowCount():
+            self.grid.load_dataframe(ds.data)
         self.data_status.setText(f"Loaded {len(ds.data)} rows, {len(ds.subject_ids())} subject(s).")
         self._refresh_subject_combo(self.nca_subject_combo)
         self._refresh_subject_combo(self.comp_subject_combo)
@@ -673,7 +689,9 @@ class MainWindow(QMainWindow):
         c_fitted = model(t_fine, *result["params"].values())
 
         units = compartmental_units(self.time_unit_combo.currentText(), conc_unit, dose_unit)
-        self.comp_results.set_results(apply_compartmental_units(result, conc_unit, dose_unit), units)
+        scaled = apply_compartmental_units(result, conc_unit, dose_unit)
+        self.comp_results.set_results(scaled, units)
+        self._comp_last_result = scaled
         self.comp_plot.plot_observed(t, c, fitted_t=t_fine, fitted_c=c_fitted,
                                       time_unit=self.time_unit_combo.currentText(),
                                       conc_unit=self.conc_unit_combo.currentText())

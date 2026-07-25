@@ -1,0 +1,13 @@
+subject_id,time,concentration,dose,route,infusion_duration,weight
+1,0.25,4.8409,500.0,extravascular,,
+1,0.5,5.9265,500.0,extravascular,,
+1,1.0,10.9693,500.0,extravascular,,
+1,1.5,11.5819,500.0,extravascular,,
+1,2.0,11.9905,500.0,extravascular,,
+1,3.0,11.4494,500.0,extravascular,,
+1,4.0,8.8408,500.0,extravascular,,
+1,6.0,7.6045,500.0,extravascular,,
+1,8.0,5.3884,500.0,extravascular,,
+1,12.0,3.8809,500.0,extravascular,,
+1,18.0,1.3003,500.0,extravascular,,
+1,24.0,0.5076,500.0,extravascular,,

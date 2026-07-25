@@ -1,0 +1,11 @@
+subject_id,time,concentration,dose,route,infusion_duration,weight
+1,0.0,64.3175,500.0,iv_bolus,,
+1,0.5,62.4842,500.0,iv_bolus,,
+1,1.0,42.3429,500.0,iv_bolus,,
+1,2.0,43.9477,500.0,iv_bolus,,
+1,3.0,40.9053,500.0,iv_bolus,,
+1,4.0,35.9863,500.0,iv_bolus,,
+1,6.0,25.4688,500.0,iv_bolus,,
+1,8.0,19.9328,500.0,iv_bolus,,
+1,10.0,13.6372,500.0,iv_bolus,,
+1,12.0,10.2838,500.0,iv_bolus,,

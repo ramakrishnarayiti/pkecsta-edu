@@ -190,3 +190,34 @@ def test_linear_scale_fit_is_unchanged_and_reports_its_scale():
     assert result["fit_scale"] == "linear"
     assert result["n_excluded"] == 0
     assert result["r_squared"] == pytest.approx(1.0, abs=1e-6)
+
+
+# ---- refusing and flagging degenerate fits ----
+
+def test_fit_refuses_fewer_observations_than_parameters():
+    # curve_fit does not object when bounds route it to the trust-region
+    # solver: it returns confident-looking estimates with a NaN R-squared.
+    model = partial(conc_1c_iv_bolus, dose=100.0)
+    with pytest.raises(ValueError, match="too few points"):
+        fit_model(model, np.array([2.0]), np.array([42.0]), p0=[0.1, 5.0],
+                   bounds=([1e-8, 1e-8], [10, 100]), param_names=["k", "V"])
+
+
+def test_fit_flags_a_parameter_pinned_at_its_bound():
+    # A flat profile converges onto k at its lower bound — a meaningless fit
+    # that otherwise looks entirely ordinary.
+    model = partial(conc_1c_iv_bolus, dose=100.0)
+    result = fit_model(model, np.array([1.0, 2.0, 4.0, 8.0, 12.0]), np.full(5, 10.0),
+                        p0=[0.1, 10.0], bounds=([1e-8, 1e-8], [10, 1000]),
+                        param_names=["k", "V"])
+    assert "k" in result["params_at_bounds"]
+
+
+def test_a_healthy_fit_reports_no_parameter_at_a_bound():
+    true_k, true_V, dose = 0.2, 10.0, 100.0
+    t = np.linspace(0.1, 24, 12)
+    y = conc_1c_iv_bolus(t, true_k, true_V, dose)
+    model = partial(conc_1c_iv_bolus, dose=dose)
+    result = fit_model(model, t, y, p0=[0.1, 5.0], bounds=([1e-8, 1e-8], [10, 100]),
+                        param_names=["k", "V"])
+    assert result["params_at_bounds"] == []

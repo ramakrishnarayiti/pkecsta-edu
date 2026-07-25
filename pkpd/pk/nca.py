@@ -385,6 +385,23 @@ def nca_extravascular(time: np.ndarray, conc: np.ndarray, dose: float, n_termina
                         lz_t_range=lz_t_range, lz_excluded_times=lz_excluded_times, tau=tau, weight=weight)
 
 
+# Every key a successful _nca_common run produces, all None. Kept in sync by
+# test_degenerate_result_has_the_same_keys_as_a_normal_one — if a parameter is
+# added below without being added here, that test fails.
+_NULL_RESULT = {
+    "cmax": None, "tmax": None, "clast": None, "tlast": None,
+    "lambda_z": None, "half_life": None, "n_points": 0, "r_squared": None,
+    "adj_r_squared": None, "slope": None, "intercept": None,
+    "terminal_t": None, "terminal_conc": None,
+    "auc_t": None, "auc_inf": None, "auc_inf_pred": None,
+    "pct_extrap": None, "pct_back_ext": None,
+    "aumc_t": None, "aumc_inf": None, "mrt": None,
+    "cl": None, "vz": None, "vss": None,
+    "dose_per_kg": None, "cl_per_kg": None, "vz_per_kg": None, "vss_per_kg": None,
+    "span": None, "flag_low_rsq": None, "flag_high_extrap": None, "flag_low_span": None,
+}
+
+
 def _nca_common(time: np.ndarray, conc: np.ndarray, dose: float, n_terminal, auc_method: str,
                  route: str, infusion_duration: float,
                  lz_t_range: tuple[float, float] | None = None,
@@ -407,7 +424,11 @@ def _nca_common(time: np.ndarray, conc: np.ndarray, dose: float, n_terminal, auc
     time, conc = time[order], conc[order]
 
     if len(time) == 0:
-        return {"cmax": None, "tmax": None, "route": route, "dose": dose,
+        # Same key set as a successful run, every value None. A degenerate
+        # profile that returned a *shorter* dict forced every caller to use
+        # .get() or risk a KeyError — the results table and the Core Output
+        # would silently show fewer rows for it instead of showing blanks.
+        return {**_NULL_RESULT, "route": route, "dose": dose,
                 "n_excluded": n_excluded, "flag_n_samples": "Insufficient",
                 "note": "no usable (finite) concentration-time points"}
 
